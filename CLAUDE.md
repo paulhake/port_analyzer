@@ -79,6 +79,14 @@ Two main risk toolkit modules with overlapping but distinct implementations:
 - Data is fetched in real-time; no local CSV files required
 - Returns multi-level DataFrame with 'Close' and 'Volume' columns
 
+### Data Organization
+
+- **Input**: `stocks_list.csv` - List of ticker symbols to analyze (one per line with 'ticker' header)
+- **Output**: `/data` folder contains downloaded price and returns data:
+  - `portfolio_prices_5y.csv` - Daily closing prices for all tickers
+  - `portfolio_returns_5y.csv` - Daily returns calculated from prices
+- **Note**: CSV files in `/data` are excluded from git via `.gitignore`
+
 ## Development Commands
 
 Currently uses Jupyter notebooks for analysis and prototyping. A UI component will be added in the future.
@@ -108,6 +116,15 @@ jupyter lab
 ```
 
 ### Working with the Notebooks
+
+- **[portfolio_data_download.ipynb](portfolio_data_download.ipynb)**: **PRIMARY WORKFLOW NOTEBOOK**
+  - Downloads 5 years of daily price data from Yahoo Finance for stocks in `stocks_list.csv`
+  - Calculates daily returns using `erk.calculate_daily_returns()`
+  - Saves prices and returns to `/data` folder as CSV files
+  - Plots cumulative returns for user-selected stocks
+  - User can edit `selected_stocks` list to compare different tickers
+  - Data quality checks for missing values
+  - Outputs: `data/portfolio_prices_5y.csv` and `data/portfolio_returns_5y.csv`
 
 - **[max drawdown.ipynb](max%20drawdown.ipynb)**:
   - Loads Fama-French data and calculates drawdowns
@@ -217,4 +234,35 @@ Portfolio optimization uses `scipy.optimize.minimize` with:
 - `edhec_risk_kit_129.py` has bug on line 36: uses `is` instead of `==` for string comparison
 - Both modules have hardcoded data paths; adjust as needed for your directory structure
 - `get_total_market_index_returns()` computes cap-weighted market index from industry data
+
+### Critical Bug Fix: Daily Returns Calculation
+
+**NEVER use `.dropna()` after calculating returns with `.pct_change()`** without understanding the implications.
+
+When calculating daily returns from price data:
+```python
+# WRONG - will drop any row with ANY NaN value in ANY column
+daily_returns = close_prices.pct_change().dropna()
+
+# CORRECT - only skip the first row (all NaN from pct_change)
+daily_returns = close_prices.pct_change().iloc[1:]
+```
+
+**Why this matters:**
+- Some tickers have shorter trading histories (e.g., SCHY started ~2021, TTD started ~2018, VIGI has gaps)
+- These tickers will have NaN values for dates before they started trading
+- `.dropna()` by default drops rows where ANY column has NaN (`how='any'` is default)
+- This can **silently truncate your entire dataset** (e.g., from 10 years to 5 years)
+- Keep the NaN values - they correctly represent dates before a ticker existed
+
+**Real example from this project:**
+- Dataset: 30 tickers over 10 years (2514 days: 2016-02-05 to 2026-02-04)
+- 3 tickers (SCHY, TTD, VIGI) have limited history with NaN in early years
+- Using `.dropna()`: Only 1197 rows remain (2021-04-30 to 2026-02-04) - **5 years lost!**
+- Using `.iloc[1:]`: All 2513 rows preserved (2016-02-08 to 2026-02-04) - **full 10 years retained**
+
+**If you must remove NaN:**
+- Use `dropna(how='all')` to only drop rows where ALL columns are NaN
+- Or use `dropna(subset=['AAPL', 'SPY'])` to only consider specific columns
+- Or use `fillna(method='ffill')` to forward-fill missing values
 
